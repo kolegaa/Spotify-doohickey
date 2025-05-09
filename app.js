@@ -6,10 +6,11 @@ var querystring = require('querystring');
 var cookieParser = require('cookie-parser');
 const fetch = require('node-fetch').default;
 const puppeteer = require('puppeteer');
+require('dotenv').config();
 
-var client_id = '78f32c1e9f56420ca1369b2e5f0b3c6e';
-var client_secret = 'e68b0b7522e44f2486f59a35e6ed4919';
-var redirect_uri = 'http://127.0.0.1:8888/callback';
+var client_id = process.env.CLIENT_ID;
+var client_secret = process.env.CLIENT_SECRET;
+var redirect_uri = process.env.REDIRECT_URI;
 
 const generateRandomString = (length) => {
   return crypto
@@ -26,7 +27,7 @@ app.use(express.static(__dirname + '/public'))
    .use(cors())
    .use(cookieParser());
 
-   app.get('/login', function(req, res) {
+   app.get('/', function(req, res) {
     var state = generateRandomString(16);
     res.cookie(stateKey, state);
   
@@ -257,5 +258,8 @@ app.get("/image", async function(req, res) {
   }
 });
 
-console.log('Listening on http://127.0.0.1:8888/callback');
-app.listen(8888);
+const PORT = process.env.PORT || 8888;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Using redirect URI: ${redirect_uri}`);
+});
