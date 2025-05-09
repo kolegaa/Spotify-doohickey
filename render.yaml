@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: the-dohickey
+    runtime: node
+    buildCommand: npm install
+    startCommand: node app.js
+    envVars:
+      - key: CLIENT_ID
+        value: 78f32c1e9f56420ca1369b2e5f0b3c6e
+      - key: CLIENT_SECRET
+        value: e68b0b7522e44f2486f59a35e6ed4919
+      - key: REDIRECT_URI
+        value: https://your-app-name.onrender.com/callback
