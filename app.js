@@ -15,6 +15,11 @@ var client_id = process.env.CLIENT_ID;
 var client_secret = process.env.CLIENT_SECRET;
 var redirect_uri = process.env.REDIRECT_URI;
 
+const DEBUG = process.env.DEBUG === 'true';
+if (DEBUG) {
+  console.log('Debug mode is enabled');
+}
+
 const generateRandomString = (length) => {
   return crypto
     .randomBytes(60)
@@ -279,8 +284,9 @@ async function registerFonts() {
       weight: 'bold',
       style: 'normal'
     });
-    
-    console.log('Fonts registered with extended character support');
+    if  (DEBUG) {
+      console.log('Fonts registered with extended character support');
+    };
   } catch (error) {
     console.error('Font registration error:', error);
   }
@@ -297,86 +303,153 @@ app.get("/image", async function(req, res) {
       return res.status(401).send('Access token missing');
     }
 
-    // Fetch currently playing track data
-    const response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-
-    if (response.status === 204 || !response.ok) {
-      return res.status(404).send('No song currently playing');
-    }
-
-    const currentlyPlaying = await response.json();
-    const track = currentlyPlaying.item;
-
-    const cleanTrackName = track.name
-  .normalize('NFKD') // Normalize Unicode
-  .replace(/[\u0300-\u036f]/g, '') // Remove combining diacritical marks
-  .replace(/[^\w\s!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~]/g, ''); // Keep common punctuation
-
     // Create canvas
-    const canvasWidth = 800;
-    const canvasHeight = 240;
-    const canvas = createCanvas(canvasWidth, canvasHeight);
+    const canvas = createCanvas(800, 240);
     const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#C0C0C0';
+    ctx.fillRect(0, 0, 800, 240);
 
-    // Draw background
-    ctx.fillStyle = '#C0C0C0'; // Silver background
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-
-    // Load album art
-    let albumArt;
     try {
-      albumArt = await loadImage(track.album.images[0].url);
-    } catch (e) {
-      console.error('Error loading album art:', e);
-      // Fallback if image fails to load
-      ctx.fillStyle = '#121212';
-      ctx.fillRect(20, 20, 200, 200);
+      // Debug: Log that we're making the API request
+      if (DEBUG) {
+        console.log('Making request to Spotify API...');
+      }
+      
+      const response = await fetch('https://api.spotify.com/v1/me/player', {
+        headers: { 
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 5000 // 5 second timeout
+      });
+
+      // Debug: Log the response status
+      if (DEBUG) {
+        console.log('Spotify API response:', response.status);
+      }
+
+      // Handle 204 (No Content) response
+      if (response.status === 204) {
+        if (DEBUG) {
+          console.log('No content - no song playing');
+        }
+        renderNoSongScreen(ctx, "No song currently playing");
+        res.set('Content-Type', 'image/png');
+        return res.send(canvas.toBuffer('image/png'));
+      }
+
+      // Handle other non-200 responses
+      if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(`Spotify API error: ${response.status} - ${errorBody}`);
+        renderNoSongScreen(ctx, "Cannot access playback");
+        res.set('Content-Type', 'image/png');
+        return res.send(canvas.toBuffer('image/png'));
+      }
+
+      const playbackState = await response.json();
+      if (DEBUG) {
+        console.log('Playback state:', playbackState);
+      }
+
+      // Check if playback is active
+      if (!playbackState?.is_playing || !playbackState.item) {
+        if (DEBUG) {
+          console.log('No active playback');
+        }
+        renderNoSongScreen(ctx, "No song currently playing");
+        res.set('Content-Type', 'image/png');
+        return res.send(canvas.toBuffer('image/png'));
+      }
+
+      // If we get here, we have a track to display
+      const track = playbackState.item;
+      if (DEBUG) {
+        console.log('Track data:', track);
+      }
+
+      // Load album art with error handling
+      let albumArt;
+      try {
+        albumArt = await loadImage(track.album.images[0]?.url);
+      } catch (e) {
+        console.error('Error loading album art:', e.message);
+        // Fallback rectangle
+        ctx.fillStyle = '#121212';
+        ctx.fillRect(20, 20, 200, 200);
+      }
+
+      // Draw album art if loaded
+      if (albumArt) {
+        ctx.drawImage(albumArt, 20, 20, 200, 200);
+      }
+
+      // Draw track info
+      drawTrackInfo(ctx, track);
+
+      // Send the image
+      res.set('Content-Type', 'image/png');
+      return res.send(canvas.toBuffer('image/png'));
+
+    } catch (error) {
+      console.error('Error in image generation:', error.message);
+      renderNoSongScreen(ctx, "Error fetching playback data");
+      res.set('Content-Type', 'image/png');
+      return res.send(canvas.toBuffer('image/png'));
     }
-
-    // Draw album art
-    if (albumArt) {
-      ctx.drawImage(albumArt, 20, 20, 200, 200);
-    }
-
-    // Set text styles
-    ctx.fillStyle = '#000000';
-    
-    // Draw track name (with word wrapping)
-    const trackName = track.name;
-    const maxWidth = 550;
-    const lineHeight = 30;
-    let y = 40;
-
-    ctx.font = 'bold 24px "Pixelated MS Sans Serif"';
-    wrapText(ctx, cleanTrackName, 240, y, maxWidth, lineHeight);  
-
-    // Draw artists
-    y += lineHeight + 10;
-    ctx.font = '18px "Pixelated MS Sans Serif"';
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    const artists = track.artists.map(artist => artist.name).join(', ');
-    wrapText(ctx, artists, 240, y, maxWidth, lineHeight);
-
-    // Draw album and duration
-    y += lineHeight + 20;
-    ctx.font = '14px "Pixelated MS Sans Serif"';
-    const albumInfo = `Album: ${track.album.name}`;
-    const duration = `Duration: ${Math.floor(track.duration_ms / 60000)}:${(Math.floor(track.duration_ms / 1000) % 60).toString().padStart(2, '0')}`;
-    
-    ctx.fillText(albumInfo, 240, y);
-    ctx.fillText(duration, 240, y + 20);
-
-    // Convert to PNG and send
-    res.set('Content-Type', 'image/png');
-    res.send(canvas.toBuffer('image/png'));
 
   } catch (error) {
-    console.error('Error generating image:', error);
-    res.status(500).send('Error generating image');
+    console.error('Unexpected error:', error);
+    const canvas = createCanvas(800, 240);
+    const ctx = canvas.getContext('2d');
+    renderNoSongScreen(ctx, "System error");
+    res.set('Content-Type', 'image/png');
+    return res.send(canvas.toBuffer('image/png'));
   }
 });
+
+// Track info drawing function
+function drawTrackInfo(ctx, track) {
+  const cleanTrackName = track.name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~]/g, '');
+
+  ctx.fillStyle = '#000000';
+  const maxWidth = 550;
+  const lineHeight = 30;
+  let y = 40;
+
+  // Track name
+  ctx.font = 'bold 24px "Pixelated MS Sans Serif"';
+  wrapText(ctx, cleanTrackName, 240, y, maxWidth, lineHeight);
+
+  // Artists
+  y += lineHeight + 10;
+  ctx.font = '18px "Pixelated MS Sans Serif"';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+  const artists = track.artists.map(artist => artist.name).join(', ');
+  wrapText(ctx, artists, 240, y, maxWidth, lineHeight);
+
+  // Album and duration
+  y += lineHeight + 20;
+  ctx.font = '14px "Pixelated MS Sans Serif"';
+  const albumInfo = `Album: ${track.album.name}`;
+  const duration = `Duration: ${Math.floor(track.duration_ms / 60000)}:${(Math.floor(track.duration_ms / 1000) % 60).toString().padStart(2, '0')}`;
+  ctx.fillText(albumInfo, 240, y);
+  ctx.fillText(duration, 240, y + 20);
+}
+
+// Improved no song screen renderer
+function renderNoSongScreen(ctx, width, height, message = "No song currently playing") {
+  // Draw background
+  ctx.fillStyle = '#C0C0C0';
+  ctx.fillRect(0, 0, width, height);
+  // Title text
+  ctx.fillStyle = '#000000';
+  ctx.font = 'bold 16px "Pixelated MS Sans Serif"';
+  ctx.fillText('No song playing', 350, 130);
+}
 
 // Helper function for text wrapping
 function wrapText(context, text, x, y, maxWidth, lineHeight) {
