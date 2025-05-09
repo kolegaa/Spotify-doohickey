@@ -296,11 +296,77 @@ async function registerFonts() {
 registerFonts().catch(console.error);
 
 app.get("/image", async function(req, res) {
+  const startTime = Date.now();
+  const requestId = crypto.randomBytes(4).toString('hex');
+  
+  if (DEBUG) {
+    console.log(`[${new Date().toISOString()}] [${requestId}] Starting /image request`);
+    console.log(`[${new Date().toISOString()}] [${requestId}] Client IP: ${req.ip}`);
+    console.log(`[${new Date().toISOString()}] [${requestId}] User-Agent: ${req.headers['user-agent']}`);
+  }
+
   try {
-    const token = req.query.access_token;
+    let token = req.query.access_token;
     
     if (!token) {
+      if (DEBUG) {
+        console.log(`[${new Date().toISOString()}] [${requestId}] Error: Access token missing`);
+      }
       return res.status(401).send('Access token missing');
+    }
+
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Attempting initial playback state fetch`);
+    }
+
+    // First try with the current token
+    let playbackState = await getPlaybackState(token, requestId);
+    
+    // If we get a 401, try refreshing the token
+    if (playbackState.error && playbackState.error.status === 401) {
+      if (DEBUG) {
+        console.log(`[${new Date().toISOString()}] [${requestId}] Token expired (401), attempting to refresh...`);
+      }
+      
+      const refreshToken = req.query.refresh_token;
+      if (!refreshToken) {
+        if (DEBUG) {
+          console.log(`[${new Date().toISOString()}] [${requestId}] Error: No refresh token available`);
+        }
+        const canvas = createCanvas(800, 240);
+        const ctx = canvas.getContext('2d');
+        renderNoSongScreen(ctx, "Session expired, please reauthenticate");
+        res.set('Content-Type', 'image/png');
+        return res.send(canvas.toBuffer('image/png'));
+      }
+      
+      if (DEBUG) {
+        console.log(`[${new Date().toISOString()}] [${requestId}] Refreshing token...`);
+      }
+      
+      // Refresh the token
+      const newTokens = await refreshAccessToken(refreshToken, requestId);
+      if (newTokens.access_token) {
+        token = newTokens.access_token;
+        if (DEBUG) {
+          console.log(`[${new Date().toISOString()}] [${requestId}] Token refreshed successfully`);
+          console.log(`[${new Date().toISOString()}] [${requestId}] New access token: ${token.substring(0, 10)}...`);
+        }
+        // Try again with the new token
+        playbackState = await getPlaybackState(token, requestId);
+      } else {
+        if (DEBUG) {
+          console.log(`[${new Date().toISOString()}] [${requestId}] Error: Failed to refresh token`);
+          if (newTokens.error) {
+            console.log(`[${new Date().toISOString()}] [${requestId}] Refresh error:`, newTokens.error);
+          }
+        }
+        const canvas = createCanvas(800, 240);
+        const ctx = canvas.getContext('2d');
+        renderNoSongScreen(ctx, "Session expired, please reauthenticate");
+        res.set('Content-Type', 'image/png');
+        return res.send(canvas.toBuffer('image/png'));
+      }
     }
 
     // Create canvas
@@ -309,105 +375,179 @@ app.get("/image", async function(req, res) {
     ctx.fillStyle = '#C0C0C0';
     ctx.fillRect(0, 0, 800, 240);
 
-    try {
-      // Debug: Log that we're making the API request
+    // Handle playback state
+    if (playbackState.error) {
       if (DEBUG) {
-        console.log('Making request to Spotify API...');
+        console.log(`[${new Date().toISOString()}] [${requestId}] Playback state error:`, playbackState.error);
       }
-      
-      const response = await fetch('https://api.spotify.com/v1/me/player', {
-        headers: { 
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 5000 // 5 second timeout
-      });
-
-      // Debug: Log the response status
-      if (DEBUG) {
-        console.log('Spotify API response:', response.status);
-      }
-
-      // Handle 204 (No Content) response
-      if (response.status === 204) {
-        if (DEBUG) {
-          console.log('No content - no song playing');
-        }
-        renderNoSongScreen(ctx, "No song currently playing");
-        res.set('Content-Type', 'image/png');
-        return res.send(canvas.toBuffer('image/png'));
-      }
-
-      // Handle other non-200 responses
-      if (!response.ok) {
-        const errorBody = await response.text();
-        console.error(`Spotify API error: ${response.status} - ${errorBody}`);
-        renderNoSongScreen(ctx, "Cannot access playback");
-        res.set('Content-Type', 'image/png');
-        return res.send(canvas.toBuffer('image/png'));
-      }
-
-      const playbackState = await response.json();
-      if (DEBUG) {
-        console.log('Playback state:', playbackState);
-      }
-
-      // Check if playback is active
-      if (!playbackState?.is_playing || !playbackState.item) {
-        if (DEBUG) {
-          console.log('No active playback');
-        }
-        renderNoSongScreen(ctx, "No song currently playing");
-        res.set('Content-Type', 'image/png');
-        return res.send(canvas.toBuffer('image/png'));
-      }
-
-      // If we get here, we have a track to display
-      const track = playbackState.item;
-      if (DEBUG) {
-        console.log('Track data:', track);
-      }
-
-      // Load album art with error handling
-      let albumArt;
-      try {
-        albumArt = await loadImage(track.album.images[0]?.url);
-      } catch (e) {
-        console.error('Error loading album art:', e.message);
-        // Fallback rectangle
-        ctx.fillStyle = '#121212';
-        ctx.fillRect(20, 20, 200, 200);
-      }
-
-      // Draw album art if loaded
-      if (albumArt) {
-        ctx.drawImage(albumArt, 20, 20, 200, 200);
-      }
-
-      // Draw track info
-      drawTrackInfo(ctx, track);
-
-      // Send the image
-      res.set('Content-Type', 'image/png');
-      return res.send(canvas.toBuffer('image/png'));
-
-    } catch (error) {
-      console.error('Error in image generation:', error.message);
       renderNoSongScreen(ctx, "Error fetching playback data");
       res.set('Content-Type', 'image/png');
       return res.send(canvas.toBuffer('image/png'));
     }
 
+    // Check if playback is active
+    if (!playbackState?.is_playing || !playbackState.item) {
+      if (DEBUG) {
+        console.log(`[${new Date().toISOString()}] [${requestId}] No active playback`);
+      }
+      renderNoSongScreen(ctx, "No song currently playing");
+      res.set('Content-Type', 'image/png');
+      return res.send(canvas.toBuffer('image/png'));
+    }
+
+    // If we get here, we have a track to display
+    const track = playbackState.item;
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Track data received`);
+      console.log(`[${new Date().toISOString()}] [${requestId}] Track: ${track.name}`);
+      console.log(`[${new Date().toISOString()}] [${requestId}] Artists: ${track.artists.map(a => a.name).join(', ')}`);
+      console.log(`[${new Date().toISOString()}] [${requestId}] Album: ${track.album.name}`);
+    }
+
+    // Load album art with error handling
+    let albumArt;
+    try {
+      if (DEBUG) {
+        console.log(`[${new Date().toISOString()}] [${requestId}] Loading album art from: ${track.album.images[0]?.url}`);
+      }
+      albumArt = await loadImage(track.album.images[0]?.url);
+    } catch (e) {
+      console.error(`[${new Date().toISOString()}] [${requestId}] Error loading album art:`, e.message);
+      // Fallback rectangle
+      ctx.fillStyle = '#121212';
+      ctx.fillRect(20, 20, 200, 200);
+    }
+
+    // Draw album art if loaded
+    if (albumArt) {
+      if (DEBUG) {
+        console.log(`[${new Date().toISOString()}] [${requestId}] Drawing album art`);
+      }
+      ctx.drawImage(albumArt, 20, 20, 200, 200);
+    }
+
+    // Draw track info
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Rendering track info`);
+    }
+    drawTrackInfo(ctx, track);
+
+    // Send the image
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Sending image response`);
+    }
+    res.set('Content-Type', 'image/png');
+    return res.send(canvas.toBuffer('image/png'));
+
   } catch (error) {
-    console.error('Unexpected error:', error);
+    console.error(`[${new Date().toISOString()}] [${requestId}] Unexpected error:`, error);
     const canvas = createCanvas(800, 240);
     const ctx = canvas.getContext('2d');
     renderNoSongScreen(ctx, "System error");
     res.set('Content-Type', 'image/png');
     return res.send(canvas.toBuffer('image/png'));
+  } finally {
+    if (DEBUG) {
+      const duration = Date.now() - startTime;
+      console.log(`[${new Date().toISOString()}] [${requestId}] Request completed in ${duration}ms`);
+    }
   }
 });
 
+// Updated helper functions with logging
+async function getPlaybackState(token, requestId) {
+  try {
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Fetching playback state`);
+    }
+    
+    const response = await fetch('https://api.spotify.com/v1/me/player', {
+      headers: { 
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 5000
+    });
+
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Spotify API response status: ${response.status}`);
+    }
+
+    // Handle 204 (No Content) response
+    if (response.status === 204) {
+      if (DEBUG) {
+        console.log(`[${new Date().toISOString()}] [${requestId}] No content response (204) - no playback`);
+      }
+      return { is_playing: false };
+    }
+
+    // Handle other non-200 responses
+    if (!response.ok) {
+      const errorBody = await response.json();
+      if (DEBUG) {
+        console.log(`[${new Date().toISOString()}] [${requestId}] Spotify API error: ${response.status}`, errorBody);
+      }
+      return { error: { status: response.status, message: errorBody } };
+    }
+
+    const data = await response.json();
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Successfully fetched playback state`);
+    }
+    return data;
+  } catch (error) {
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Error in getPlaybackState:`, error.message);
+    }
+    return { error: { status: 500, message: error.message } };
+  }
+}
+
+async function refreshAccessToken(refreshToken, requestId) {
+  try {
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Refreshing access token`);
+    }
+    
+    const authOptions = {
+      url: 'https://accounts.spotify.com/api/token',
+      headers: { 
+        'content-type': 'application/x-www-form-urlencoded',
+        'Authorization': 'Basic ' + (new Buffer.from(client_id + ':' + client_secret).toString('base64')) 
+      },
+      form: {
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken
+      },
+      json: true
+    };
+
+    const response = await request.post(authOptions);
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Token refresh response status: ${response.statusCode}`);
+    }
+
+    if (response.statusCode === 200) {
+      if (DEBUG) {
+        console.log(`[${new Date().toISOString()}] [${requestId}] Token refresh successful`);
+      }
+      return {
+        access_token: response.body.access_token,
+        refresh_token: response.body.refresh_token || refreshToken
+      };
+    } else {
+      if (DEBUG) {
+        console.log(`[${new Date().toISOString()}] [${requestId}] Token refresh failed:`, response.body);
+      }
+      return { error: response.body };
+    }
+  } catch (error) {
+    if (DEBUG) {
+      console.log(`[${new Date().toISOString()}] [${requestId}] Error in refreshAccessToken:`, error.message);
+    }
+    return { error: error.message };
+  }
+}
 // Track info drawing function
 function drawTrackInfo(ctx, track) {
   const cleanTrackName = track.name
