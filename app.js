@@ -23,6 +23,33 @@ var stateKey = 'spotify_auth_state';
 
 var app = express();
 
+if (process.env.DEBUG === 'true') {
+  app.use((req, res, next) => {
+    const timestamp = new Date().toISOString();
+    const method = req.method;
+    const path = req.path;
+    const clientIP = req.ip || 
+                    req.headers['x-forwarded-for']?.split(',')[0] || 
+                    req.socket.remoteAddress ||
+                    req.connection.remoteAddress;
+    
+    console.log(`[${timestamp}] ${method} ${path} from ${clientIP}`);
+    console.log(`  User-Agent: ${req.headers['user-agent']}`);
+    console.log(`  Referrer: ${req.headers['referer'] || 'none'}`);
+    
+    // Log the start time
+    const start = Date.now();
+    
+    // Log when the response finishes
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      console.log(`[${timestamp}] ${method} ${path} completed in ${duration}ms with status ${res.statusCode}`);
+    });
+    
+    next();
+  });
+};
+
 app.use(express.static(__dirname + '/public'))
    .use(cors())
    .use(cookieParser());
