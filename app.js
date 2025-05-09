@@ -153,28 +153,39 @@ app.get("/nowplaying", async function(req, res) {
     const track = currentlyPlaying.item;
     res.send(`
       <html>
-        <head>
-          <style>
+
+<head>
+    <style>
+            @font-face{font-family:"Pixelated MS Sans Serif";font-style:normal;font-weight:400;src:url(https://unpkg.com/98.css@0.1.20/dist/ms_sans_serif.woff) format("woff");src:url(https://unpkg.com/98.css@0.1.20/dist/ms_sans_serif.woff2) format("woff2")}
+            @font-face{font-family:"Pixelated MS Sans Serif";font-style:normal;font-weight:700;src:url(https://unpkg.com/98.css@0.1.20/dist/ms_sans_serif_bold.woff) format("woff");src:url(https://unpkg.com/98.css@0.1.20/dist/ms_sans_serif_bold.woff2) format("woff2")}
+
+            .container {
+                color: black;
+                font-family: "Pixelated MS Sans Serif", sans-serif;
+                font-size: 12px;
+            }
+
             body {
               margin: 0;
               padding: 20px;
-              background: #121212;
-              color: white;
+              background: silver;
+              color: black;
               width: 800px;
               height: 240px;
               display: flex;
               align-items: center;
+            
             }
             .container {
               display: flex;
               align-items: center;
               gap: 30px;
               width: 100%;
+              padding: 20px;
             }
             img.album-art {
               width: 200px;
               height: 200px;
-              border-radius: 10px;
               flex-shrink: 0;
             }
             .track-info {
@@ -187,31 +198,32 @@ app.get("/nowplaying", async function(req, res) {
             }
             .artists {
               font-size: 18px;
-              color: #b3b3b3;
+              color:rgba(0, 0, 0, 0.7), 0);
               margin-bottom: 25px;
             }
             .meta {
               font-size: 14px;
-              color: #b3b3b3;
+              color:rgba(0, 0, 0, 0.7), 0);
             }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <img src="${track.album.images[0].url}" class="album-art">
-            <div class="track-info">
-              <div class="track-name">${track.name}</div>
-              <div class="artists">
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <img src="${track.album.images[0].url}" class="album-art">
+        <div class="track-info">
+            <div class="track-name">${track.name}</div>
+            <div class="artists">
                 ${track.artists.map(artist => artist.name).join(', ')}
-              </div>
-              <div class="meta">
-                Album: ${track.album.name}<br>
-                Duration: ${Math.floor(track.duration_ms / 60000)}:${(Math.floor(track.duration_ms / 1000) % 60).toString().padStart(2, '0')}
-              </div>
             </div>
-          </div>
-        </body>
-      </html>
+            <div class="meta">
+                Album: ${track.album.name}<br> Duration: ${Math.floor(track.duration_ms / 60000)}:${(Math.floor(track.duration_ms / 1000) % 60).toString().padStart(2, '0')}
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
     `);
     
   } catch (error) {
