@@ -5,8 +5,11 @@ var cors = require('cors');
 var querystring = require('querystring');
 var cookieParser = require('cookie-parser');
 const fetch = require('node-fetch').default;
-const puppeteer = require('puppeteer');
 require('dotenv').config();
+const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas');
+const fs = require('fs');
+const path = require('path');
+
 
 var client_id = process.env.CLIENT_ID;
 var client_secret = process.env.CLIENT_SECRET;
@@ -259,54 +262,142 @@ app.get("/nowplaying", async function(req, res) {
   }
 });
 
+async function registerFonts() {
+  try {
+    // Load regular font
+    const regularFontResponse = await fetch('https://unpkg.com/98.css@0.1.20/dist/ms_sans_serif.woff');
+    const regularFontBuffer = Buffer.from(await regularFontResponse.arrayBuffer());
+    GlobalFonts.register(regularFontBuffer, 'Pixelated MS Sans Serif', { 
+      weight: 'normal',
+      style: 'normal'
+    });
+    
+    // Load bold font
+    const boldFontResponse = await fetch('https://unpkg.com/98.css@0.1.20/dist/ms_sans_serif_bold.woff');
+    const boldFontBuffer = Buffer.from(await boldFontResponse.arrayBuffer());
+    GlobalFonts.register(boldFontBuffer, 'Pixelated MS Sans Serif', {
+      weight: 'bold',
+      style: 'normal'
+    });
+    
+    console.log('Fonts registered with extended character support');
+  } catch (error) {
+    console.error('Font registration error:', error);
+  }
+}
+
+// Call this when your app starts
+registerFonts().catch(console.error);
+
 app.get("/image", async function(req, res) {
   try {
-    const isLocal = process.env.LOCAL === 'true';
+    const token = req.query.access_token;
     
-    // Proper Chromium configuration for Render
-    const chromium = isLocal ? null : require('@sparticuz/chromium');
-    const puppeteer = isLocal ? require('puppeteer') : require('puppeteer-core');
+    if (!token) {
+      return res.status(401).send('Access token missing');
+    }
 
-    const browser = await puppeteer.launch({
-      args: isLocal 
-        ? [] 
-        : chromium.args,
-      executablePath: isLocal
-        ? undefined
-        : await chromium.executablePath(),
-      headless: true,
-      ignoreHTTPSErrors: true
+    // Fetch currently playing track data
+    const response = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+      headers: { Authorization: `Bearer ${token}` }
     });
 
-    const page = await browser.newPage();
-    
-    const nowPlayingUrl = isLocal
-      ? `http://localhost:${PORT}/nowplaying?access_token=${req.query.access_token}`
-      : `${process.env.RENDER_EXTERNAL_URL}/nowplaying?access_token=${req.query.access_token}`;
+    if (response.status === 204 || !response.ok) {
+      return res.status(404).send('No song currently playing');
+    }
 
-    await page.setViewport({ width: 800, height: 240 });
-    await page.goto(nowPlayingUrl, { 
-      waitUntil: 'networkidle0',
-      timeout: 60000
-    });
-    
-    // Add delay to ensure rendering completes
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const screenshot = await page.screenshot({
-      type: 'png',
-      omitBackground: true
-    });
+    const currentlyPlaying = await response.json();
+    const track = currentlyPlaying.item;
 
-    await browser.close();
+    const cleanTrackName = track.name
+  .normalize('NFKD') // Normalize Unicode
+  .replace(/[\u0300-\u036f]/g, '') // Remove combining diacritical marks
+  .replace(/[^\w\s!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~]/g, ''); // Keep common punctuation
+
+    // Create canvas
+    const canvasWidth = 800;
+    const canvasHeight = 240;
+    const canvas = createCanvas(canvasWidth, canvasHeight);
+    const ctx = canvas.getContext('2d');
+
+    // Draw background
+    ctx.fillStyle = '#C0C0C0'; // Silver background
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    // Load album art
+    let albumArt;
+    try {
+      albumArt = await loadImage(track.album.images[0].url);
+    } catch (e) {
+      console.error('Error loading album art:', e);
+      // Fallback if image fails to load
+      ctx.fillStyle = '#121212';
+      ctx.fillRect(20, 20, 200, 200);
+    }
+
+    // Draw album art
+    if (albumArt) {
+      ctx.drawImage(albumArt, 20, 20, 200, 200);
+    }
+
+    // Set text styles
+    ctx.fillStyle = '#000000';
+    
+    // Draw track name (with word wrapping)
+    const trackName = track.name;
+    const maxWidth = 550;
+    const lineHeight = 30;
+    let y = 40;
+
+    ctx.font = 'bold 24px "Pixelated MS Sans Serif"';
+    wrapText(ctx, cleanTrackName, 240, y, maxWidth, lineHeight);  
+
+    // Draw artists
+    y += lineHeight + 10;
+    ctx.font = '18px "Pixelated MS Sans Serif"';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    const artists = track.artists.map(artist => artist.name).join(', ');
+    wrapText(ctx, artists, 240, y, maxWidth, lineHeight);
+
+    // Draw album and duration
+    y += lineHeight + 20;
+    ctx.font = '14px "Pixelated MS Sans Serif"';
+    const albumInfo = `Album: ${track.album.name}`;
+    const duration = `Duration: ${Math.floor(track.duration_ms / 60000)}:${(Math.floor(track.duration_ms / 1000) % 60).toString().padStart(2, '0')}`;
+    
+    ctx.fillText(albumInfo, 240, y);
+    ctx.fillText(duration, 240, y + 20);
+
+    // Convert to PNG and send
     res.set('Content-Type', 'image/png');
-    res.send(screenshot);
+    res.send(canvas.toBuffer('image/png'));
 
   } catch (error) {
     console.error('Error generating image:', error);
-    res.status(500).send(`Error generating image: ${error.message}`);
+    res.status(500).send('Error generating image');
   }
 });
+
+// Helper function for text wrapping
+function wrapText(context, text, x, y, maxWidth, lineHeight) {
+  const words = text.split(' ');
+  let line = '';
+
+  for (let n = 0; n < words.length; n++) {
+    const testLine = line + words[n] + ' ';
+    const metrics = context.measureText(testLine);
+    const testWidth = metrics.width;
+    
+    if (testWidth > maxWidth && n > 0) {
+      context.fillText(line, x, y);
+      line = words[n] + ' ';
+      y += lineHeight;
+    } else {
+      line = testLine;
+    }
+  }
+  context.fillText(line, x, y);
+}
 
 const PORT = process.env.PORT || 8888;
 app.listen(PORT, () => {
