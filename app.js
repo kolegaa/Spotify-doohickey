@@ -234,17 +234,45 @@ app.get("/nowplaying", async function(req, res) {
 
 app.get("/image", async function(req, res) {
   try {
+    // Determine if we're running locally
+    const isLocal = process.env.LOCAL === 'true';
+    
+    // Configure Puppeteer based on environment
     const browser = await puppeteer.launch({
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: isLocal 
+        ? [] // Default args for local
+        : [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage'
+          ],
+      executablePath: isLocal
+        ? undefined // Use default local Chrome
+        : process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
+      headless: isLocal ? 'new' : true // New headless mode for local
     });
+
     const page = await browser.newPage();
     
+    // Determine the URL to use
+    const nowPlayingUrl = isLocal
+      ? `http://localhost:${PORT}/nowplaying?access_token=${req.query.access_token}`
+      : `${process.env.RENDER_EXTERNAL_URL}/nowplaying?access_token=${req.query.access_token}`;
+
     await page.setViewport({ width: 800, height: 240 });
-    await page.goto(`http://localhost:8888/nowplaying?access_token=${req.query.access_token}`);
+    await page.goto(nowPlayingUrl, { 
+      waitUntil: 'networkidle0',
+      timeout: isLocal ? 30000 : 60000 // Longer timeout for Render
+    });
     
+    // Wait for elements to load
+    await page.waitForSelector('.album-art', { timeout: 5000 });
+    await page.waitForSelector('.track-name', { timeout: 5000 });
+
     const screenshot = await page.screenshot({
       type: 'png',
-      omitBackground: true
+      omitBackground: true,
+      fullPage: false
     });
 
     await browser.close();
@@ -254,7 +282,7 @@ app.get("/image", async function(req, res) {
 
   } catch (error) {
     console.error('Error generating image:', error);
-    res.status(500).send('Error generating image');
+    res.status(500).send(`Error generating image: ${error.message}`);
   }
 });
 
